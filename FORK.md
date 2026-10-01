@@ -32,13 +32,18 @@ The change is deliberately small and **additive** to keep upstream rebases easy.
 
 ### 1. New file: `mcp_redmine/per_user_auth.py` (additive — no upstream conflict)
 
-- `PER_USER_API_KEY_HEADER` — the header name (`x-redmine-api-key`).
-- `_current_api_key: ContextVar` — holds the current request's key.
-- `get_request_api_key()` — read the current request's key (or `None`).
+- `PER_USER_API_KEY_HEADER` — the identity header name (`x-redmine-api-key`).
+- `PER_USER_PASSTHROUGH_HEADERS` — request headers forwarded verbatim to
+  Redmine (currently `x-redmine-username`). Some deployments front Redmine with
+  a gateway that *requires* `X-Redmine-Username` to be present for the request
+  to be routed/accepted; the API key still determines identity.
+- `_current_api_key` / `_current_passthrough` ContextVars — hold the current
+  request's key and passthrough headers.
+- `get_request_api_key()` / `get_request_passthrough_headers()` — read them.
 - `PerUserApiKeyMiddleware` — pure-ASGI middleware that copies the
-  `X-Redmine-API-Key` header into the ContextVar for the request's lifetime and
-  resets it afterwards. Pure-ASGI (not `BaseHTTPMiddleware`) so it does not
-  buffer streaming/SSE responses.
+  `X-Redmine-API-Key` and passthrough headers into the ContextVars for the
+  request's lifetime and resets them afterwards. Pure-ASGI (not
+  `BaseHTTPMiddleware`) so it does not buffer streaming/SSE responses.
 
 ### 2. `mcp_redmine/server.py` — three minimal, clearly-marked edits
 
@@ -71,7 +76,10 @@ this workaround.
 ## Client requirement
 
 The MCP client must send the per-user key as an `X-Redmine-API-Key` request
-header on each call, sourcing it from wherever that user's key is stored.
+header on each call, sourcing it from wherever that user's key is stored. If the
+Redmine deployment is fronted by a gateway that requires it (e.g.
+`api-cdredmine*`), the client must also send an `X-Redmine-Username` header; it
+is forwarded verbatim to Redmine.
 
 ## How to verify after any change or sync
 
