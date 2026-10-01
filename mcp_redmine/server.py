@@ -372,10 +372,37 @@ def main():
         import uvicorn
         from mcp_redmine.per_user_auth import PerUserApiKeyMiddleware
 
+        # FORK: configure transport security. The MCP SDK enables DNS-rebinding
+        # protection by default and only accepts requests whose Host header is
+        # localhost, so a containerised server reached as e.g. "redmine-mcp:8000"
+        # rejects every POST with 421 Misdirected Request. This server runs on an
+        # internal network behind the Redmine API gateway's own auth, so by
+        # default we disable the Host/Origin check.
+        #
+        # To re-enable it, set MCP_ALLOWED_HOSTS (comma-separated). The SDK does
+        # NOT support a bare "*" wildcard; use exact hosts or a ":*" port wildcard
+        # (e.g. "redmine-mcp:*,localhost:*"). Setting MCP_ALLOWED_HOSTS turns
+        # protection back on; MCP_ALLOWED_ORIGINS is honoured the same way.
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        def _csv_env(name):
+            raw = os.environ.get(name)
+            if not raw:
+                return []
+            return [item.strip() for item in raw.split(",") if item.strip()]
+
+        allowed_hosts = _csv_env("MCP_ALLOWED_HOSTS")
+        allowed_origins = _csv_env("MCP_ALLOWED_ORIGINS")
+        transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=bool(allowed_hosts or allowed_origins),
+            allowed_hosts=allowed_hosts,
+            allowed_origins=allowed_origins,
+        )
+
         if args.transport == "sse":
-            app = mcp.sse_app()
+            app = mcp.sse_app(transport_security=transport_security)
         else:
-            app = mcp.streamable_http_app()
+            app = mcp.streamable_http_app(transport_security=transport_security)
         app.add_middleware(PerUserApiKeyMiddleware)
 
         uvicorn.run(app, host=args.host, port=args.port,
