@@ -5,6 +5,9 @@ import httpx
 from mcp.server.mcpserver import MCPServer, Image
 from mcp.server.mcpserver.utilities.logging import get_logger
 
+# FORK: per-user API key support (additive module). See FORK.md.
+from mcp_redmine.per_user_auth import get_request_api_key
+
 ### Constants ###
 
 VERSION = "2026.09.10.084818"
@@ -16,7 +19,10 @@ with open(current_dir / 'redmine_openapi.yml') as f:
 
 # Constants from environment
 REDMINE_URL = os.environ['REDMINE_URL'].rstrip('/') + '/'  # Normalize to always end with /
-REDMINE_API_KEY = os.environ['REDMINE_API_KEY']
+# FORK: optional (was os.environ['REDMINE_API_KEY']). In per-user HTTP deployments the
+# key arrives per-request via the X-Redmine-API-Key header (see per_user_auth.py); the
+# env key is the fallback for stdio / single-user use. See FORK.md.
+REDMINE_API_KEY = os.environ.get('REDMINE_API_KEY', '')
 REDMINE_RESPONSE_FORMAT = os.environ.get('REDMINE_RESPONSE_FORMAT', 'yaml').lower()
 
 # Custom headers (format: "Header1: Value1, Header2: Value2")
@@ -75,8 +81,17 @@ def request(path: str, method: str = 'get', data: dict = None, params: dict = No
         return {"status_code": 0, "body": None,
                 "error": f"REDMINE_READ_ONLY is enabled: refusing {method.upper()} request"}
 
+    # FORK: prefer the per-request key (X-Redmine-API-Key header, captured into a
+    # ContextVar by PerUserApiKeyMiddleware) over the process-wide env key. Falls
+    # back to the env key for stdio / single-user use. See FORK.md.
+    api_key = get_request_api_key() or REDMINE_API_KEY
+    if not api_key:
+        return {"status_code": 0, "body": None,
+                "error": "No Redmine API key: send it in the X-Redmine-API-Key header "
+                         "or set the REDMINE_API_KEY environment variable."}
+
     headers = {
-        'X-Redmine-API-Key': REDMINE_API_KEY,
+        'X-Redmine-API-Key': api_key,
         'Content-Type': content_type,
         **REDMINE_HEADERS
     }
@@ -345,7 +360,22 @@ def main():
     if args.transport == "stdio":
         mcp.run(transport="stdio")
     else:
-        mcp.run(transport=args.transport, host=args.host, port=args.port)
+        # FORK: attach PerUserApiKeyMiddleware so each request's X-Redmine-API-Key
+        # header authenticates as that user. mcp.run()/run_*_async() rebuild the
+        # Starlette app internally, dropping externally-added middleware, so we
+        # build the app here, add the middleware, and serve it with uvicorn
+        # directly. See FORK.md.
+        import uvicorn
+        from mcp_redmine.per_user_auth import PerUserApiKeyMiddleware
+
+        if args.transport == "sse":
+            app = mcp.sse_app()
+        else:
+            app = mcp.streamable_http_app()
+        app.add_middleware(PerUserApiKeyMiddleware)
+
+        uvicorn.run(app, host=args.host, port=args.port,
+                    log_level=mcp.settings.log_level.lower())
 
 if __name__ == "__main__":
     main()
