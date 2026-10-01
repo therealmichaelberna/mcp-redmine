@@ -6,7 +6,7 @@ from mcp.server.mcpserver import MCPServer, Image
 from mcp.server.mcpserver.utilities.logging import get_logger
 
 # FORK: per-user API key support (additive module). See FORK.md.
-from mcp_redmine.per_user_auth import get_request_api_key
+from mcp_redmine.per_user_auth import get_request_api_key, get_request_passthrough_headers
 
 ### Constants ###
 
@@ -93,7 +93,11 @@ def request(path: str, method: str = 'get', data: dict = None, params: dict = No
     headers = {
         'X-Redmine-API-Key': api_key,
         'Content-Type': content_type,
-        **REDMINE_HEADERS
+        **REDMINE_HEADERS,
+        # FORK: per-request passthrough headers (e.g. X-Redmine-Username) captured
+        # from the incoming request. Some deployments front Redmine with a gateway
+        # that requires X-Redmine-Username to be present. See per_user_auth.py.
+        **get_request_passthrough_headers(),
     }
 
     # Security: path is model-controlled. urljoin returns absolute URLs in `path` unchanged, which would
